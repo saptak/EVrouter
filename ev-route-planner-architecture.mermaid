@@ -1,0 +1,14 @@
+graph TD;
+    A["User Interface"] --> B["Route Form"]
+    A --> C["Map Visualization"]
+    A --> D["Chatbot Interface"]
+    B --> E["Route Service"]
+    E --> F["Open Charge Map API"]
+    E --> G["Route Optimization Algorithm"]
+    G --> H["Neo4j/Weaviate Integration"]
+    F --> I["Charging Station Data"]
+    I --> C
+    G --> C
+    D --> J["AI SDK/LLM"]
+    J --> K["Route Context"]
+    K --> D
