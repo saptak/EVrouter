@@ -1,0 +1,4 @@
+next steps:
+- add real data from openchargemap api to charging_service
+- update route_service._analyze_range to search charging stations where required
+- integrate neo4j for route optimization with charging stations?

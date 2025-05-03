@@ -132,7 +132,15 @@ class RouteService:
     ) -> List[RouteSegment]:
         """
         Analyze route segments against vehicle range.
-        Add a range_sufficient boolean property to each segment.
+        Returns new list of segments with range_sufficient field set based on
+        whether the segment can be completed with remaining range.
+        
+        Args:
+            route_segments: List of route segments to analyze
+            vehicle_range: Maximum vehicle range in kilometers
+            
+        Returns:
+            New list of segments with range_sufficient field set
         """
         remaining_range = vehicle_range
         analyzed_segments = []
@@ -141,15 +149,28 @@ class RouteService:
             # Check if the current segment can be completed with remaining range
             range_sufficient = segment.distance <= remaining_range
             
-            # Create a copy of the segment with range information
-            segment_copy = segment.dict()
-            segment_copy["range_sufficient"] = range_sufficient
+            # Create new segment with range analysis
+            analyzed_segment = RouteSegment(
+                start_location=segment.start_location,
+                end_location=segment.end_location,
+                distance=segment.distance,
+                duration=segment.duration,
+                is_charging_stop=segment.is_charging_stop,
+                charging_time=segment.charging_time,
+                charge_to_level=segment.charge_to_level,
+                polyline=segment.polyline,
+                range_sufficient=range_sufficient
+            )
             
-            # Calculate remaining range after this segment
+            analyzed_segments.append(analyzed_segment)
+            
+            # Update remaining range only if we can complete this segment
             if range_sufficient:
                 remaining_range -= segment.distance
-            
-            analyzed_segments.append(RouteSegment(**segment_copy))
+            else:
+                # If we can't complete the segment, reset to full range
+                # (assuming we'll need a charging stop)
+                remaining_range = vehicle_range
             
         return analyzed_segments
     
@@ -158,18 +179,38 @@ class RouteService:
         route_segments: List[RouteSegment], 
         vehicle_range: float
     ) -> List[RouteSegment]:
-        """Insert charging stops where needed based on range analysis"""
+        """
+        Insert charging stops where needed based on range analysis.
+        Uses the range_sufficient field from _analyze_range to determine
+        where charging stops are needed.
+        
+        Args:
+            route_segments: List of route segments with range analysis
+            vehicle_range: Maximum vehicle range in kilometers
+            
+        Returns:
+            New list of segments with charging stops inserted where needed
+        """
         final_route = []
         remaining_range = vehicle_range
         
-        for segment in route_segments:
-            if segment.distance <= remaining_range:
-                # We can drive this segment without charging
+        for i, segment in enumerate(route_segments):
+            if segment.range_sufficient:
+                # We can complete this segment with current range
                 final_route.append(segment)
                 remaining_range -= segment.distance
             else:
-                # Need a charging stop before this segment
+                # Need to charge before this segment
                 charging_station = self._find_nearest_charging_station(segment.start_location)
+                
+                # Calculate how much charge we need for this segment plus some buffer
+                needed_range = segment.distance
+                # Look ahead to next segment if available to optimize charging
+                if i + 1 < len(route_segments):
+                    next_segment = route_segments[i + 1]
+                    if next_segment.distance < vehicle_range:
+                        # If next segment is within range, charge enough for both
+                        needed_range += next_segment.distance
                 
                 # Add a charging stop segment
                 charging_segment = RouteSegment(
@@ -179,13 +220,27 @@ class RouteService:
                     duration=0,  # Will be filled in by _calculate_charging_requirements
                     is_charging_stop=True,
                     charging_time=None,  # Will be filled in later
-                    charge_to_level=None  # Will be filled in later
+                    charge_to_level=None,  # Will be filled in later
+                    polyline=None,
+                    range_sufficient=True  # Charging stop is always "sufficient"
                 )
                 
                 final_route.append(charging_segment)
                 
-                # After charging, we can continue with the original segment
-                final_route.append(segment)
+                # Add the original segment with updated range information
+                updated_segment = RouteSegment(
+                    start_location=charging_station,
+                    end_location=segment.end_location,
+                    distance=segment.distance,
+                    duration=segment.duration,
+                    is_charging_stop=segment.is_charging_stop,
+                    charging_time=segment.charging_time,
+                    charge_to_level=segment.charge_to_level,
+                    polyline=segment.polyline,
+                    range_sufficient=True  # After charging, we can complete this segment
+                )
+                
+                final_route.append(updated_segment)
                 remaining_range = vehicle_range - segment.distance
                 
         return final_route
@@ -244,3 +299,19 @@ class RouteService:
                     charge_to_level=segment.charge_to_level
                 ))
         return charging_stops
+
+if __name__ == '__main__':
+    from app.services.geocoding_service import GeocodingService
+    route_service = RouteService()
+    geocoding_service = GeocodingService()
+    seattle = geocoding_service.get_location("Seattle")
+    redmond = geocoding_service.get_location("New Haven")
+    route = route_service.calculate_route(
+        start=seattle,
+        destination=redmond
+    )
+    # print(route)
+    for seg in route.route_segments:
+        print(seg)
+    # print(route.charging_stops)
+    
