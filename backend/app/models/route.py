@@ -17,6 +17,7 @@ class RouteSegment(BaseModel):
     charging_time: Optional[float] = None  # in minutes
     charge_to_level: Optional[float] = None  # percentage
     polyline: Optional[str] = None  # encoded polyline for map rendering
+    range_sufficient: bool = False
 
 class ChargingStop(BaseModel):
     location: Location

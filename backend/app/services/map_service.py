@@ -1,9 +1,9 @@
-import requests
-from app.core.config import settings
-from app.models.location import Location
-from app.models.route import RouteSegment
-from typing import List, Optional
 import logging
+import requests
+from typing import List, Optional
+from app.core.config import settings
+from app.models import Location, RouteSegment
+from app.services.geocoding_service import GeocodingService
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +11,8 @@ class MapService:
     """Service for interacting with mapping APIs"""
     
     def geocode(self, address: str) -> Optional[Location]:
+        # implement later
+        # use open-meteo geocoding api for now
         """
         Convert an address to coordinates.
         
@@ -52,7 +54,7 @@ class MapService:
         waypoints: Optional[List[Location]] = None
     ) -> List[RouteSegment]:
         """
-        Get a route from start to destination, optionally via waypoints.
+        Get a route from start to destination, optionally via waypoints using OSRM API.
         
         Args:
             start: Starting location
@@ -66,58 +68,71 @@ class MapService:
             waypoints = []
             
         try:
-            # In a real implementation, this would call the OSRM API
-            # For now, return a simple route
-            return self._get_mock_route(start, destination, waypoints)
+            # Format coordinates for OSRM (lon,lat format)
+            coords = [f"{start.longitude},{start.latitude}"]
+            
+            # Add waypoints
+            for point in waypoints:
+                coords.append(f"{point.longitude},{point.latitude}")
+                
+            # Add destination
+            coords.append(f"{destination.longitude},{destination.latitude}")
+            
+            # Build OSRM API URL
+            coordinates = ";".join(coords)
+            url = f"{settings.OSRM_API_URL}/route/v1/driving/{coordinates}"
+            
+            # Parameters for the request
+            params = {
+                "overview": "full",  # Get full geometry
+                "steps": "true",     # Get turn-by-turn instructions
+                "annotations": "true" # Get additional data like duration and distance
+            }
+            
+            # Make request to OSRM
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data["code"] != "Ok":
+                logger.error(f"OSRM API error: {data['message'] if 'message' in data else 'Unknown error'}")
+                return []
+            
+            # Process the route into segments
+            return self._process_osrm_response(data, [start] + waypoints + [destination])
+            
         except Exception as e:
-            logger.error(f"Error getting route: {str(e)}")
+            logger.error(f"Error getting route from OSRM: {str(e)}")
             return []
     
-    def _get_mock_route(
-        self, 
-        start: Location, 
-        destination: Location, 
-        waypoints: List[Location]
-    ) -> List[RouteSegment]:
-        """Create a mock route for testing"""
+    def _process_osrm_response(self, data: dict, locations: List[Location]) -> List[RouteSegment]:
+        """Process OSRM response into route segments"""
         segments = []
+        route = data["routes"][0]  # Get the first (best) route
         
-        # Create direct segments between all points in order
-        all_points = [start] + waypoints + [destination]
-        
-        for i in range(len(all_points) - 1):
-            current = all_points[i]
-            next_point = all_points[i + 1]
-            
-            # Calculate approximate distance
-            distance = self._calculate_distance(current, next_point)
-            
-            # Estimate duration (assuming 60km/h average speed)
-            duration = (distance / 60) * 60  # hours to minutes
+        # Process each leg of the journey
+        for i, leg in enumerate(route["legs"]):
+            start_location = locations[i]
+            end_location = locations[i + 1]
             
             segments.append(RouteSegment(
-                start_location=current,
-                end_location=next_point,
-                distance=distance,
-                duration=duration,
+                start_location=start_location,
+                end_location=end_location,
+                distance=leg["distance"] / 1000,  # Convert to kilometers
+                duration=leg["duration"] / 60,    # Convert to minutes
                 is_charging_stop=False,
-                polyline=self._create_mock_polyline(current, next_point)
+                polyline=route["geometry"]  # OSRM returns encoded polyline
             ))
-            
-        return segments
-    
-    def _calculate_distance(self, point1: Location, point2: Location) -> float:
-        """Calculate distance between two points (kilometers)"""
-        # In a real app, this would use the haversine formula
-        # For simplicity, we'll use a very rough approximation
-        lat_diff = abs(point1.latitude - point2.latitude)
-        lon_diff = abs(point1.longitude - point2.longitude)
         
-        # Very rough approximation (1 degree ≈ 111km)
-        return ((lat_diff ** 2) + (lon_diff ** 2) ** 0.5) * 111
-    
-    def _create_mock_polyline(self, start: Location, end: Location) -> str:
-        """Create a mock polyline for testing"""
-        # In a real app, this would be a properly encoded polyline
-        # For testing, we'll just return a placeholder string
-        return f"mock_polyline_{start.latitude}_{start.longitude}_{end.latitude}_{end.longitude}"
+        return segments
+
+if __name__ == "__main__":
+    map_service = MapService()
+    geocoding_service = GeocodingService()
+    seattle = geocoding_service.get_location("Seattle")
+    redmond = geocoding_service.get_location("Redmond")
+    start = seattle
+    destination = redmond
+    waypoints = []
+    route = map_service.get_route(start, destination, waypoints)
+    print(route)
